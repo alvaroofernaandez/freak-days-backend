@@ -1,0 +1,466 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum MembershipRole {
+  owner
+  admin
+  member
+}
+
+enum PartyMemberRole {
+  owner
+  admin
+  member
+}
+
+enum ReleaseCalendarType {
+  anime_episode
+  manga_volume
+  event
+}
+
+enum PartyListType {
+  anime
+  manga
+  quests
+  tier_list
+}
+
+enum AnimeStatus {
+  watching
+  completed
+  on_hold
+  dropped
+  plan_to_watch
+  rewatching
+}
+
+enum MangaStatus {
+  collecting
+  completed
+  dropped
+  wishlist
+}
+
+enum QuestDifficulty {
+  easy
+  medium
+  hard
+  legendary
+}
+
+enum QuestNotificationType {
+  overdue
+  reminder
+  due_soon
+}
+
+enum WorkoutSessionStatus {
+  in_progress
+  completed
+}
+
+model User {
+  id          String       @id @default(cuid())
+  clerkUserId String       @unique
+  email       String?      @unique
+  firstName   String?
+  lastName    String?
+  isActive    Boolean      @default(true)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  memberships      Membership[]
+  profile          Profile?
+  ownedParties     Party[]       @relation("PartyOwner")
+  partyMemberships PartyMember[]
+  auditLogs        AuditLog[]    @relation("AuditLogActor")
+  modulePreferences UserModulePreference[]
+  releaseCalendars  ReleaseCalendar[]
+  createdPartyLists PartyList[]      @relation("PartyListCreator")
+  createdPartyListItems PartyListItem[] @relation("PartyListItemCreator")
+  animeEntries          AnimeEntry[]
+  mangaEntries          MangaEntry[]
+  quests               Quest[]
+  questCompletions     QuestCompletion[]
+  questNotifications   QuestNotification[]
+  workoutSessions      WorkoutSession[]
+  workoutExercises     WorkoutExercise[]
+  workoutSets          WorkoutSet[]
+}
+
+model Profile {
+  id              String   @id @default(cuid())
+  userId          String   @unique
+  username        String   @default("")
+  displayName     String?
+  avatarUrl       String?
+  avatarKey       String?
+  bannerUrl       String?
+  bannerKey       String?
+  totalExp        Int      @default(0)
+  level           Int      @default(1)
+  bio             String?
+  favoriteAnimeId String?
+  favoriteMangaId String?
+  location        String?
+  website         String?
+  socialLinks     Json     @default("{}")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Organization {
+  id          String       @id @default(cuid())
+  clerkOrgId  String?      @unique
+  slug        String       @unique
+  name        String
+  isActive    Boolean      @default(true)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  memberships Membership[]
+  parties     Party[]
+  auditLogs   AuditLog[]
+  modulePreferences UserModulePreference[]
+  releaseCalendars ReleaseCalendar[]
+  animeEntries      AnimeEntry[]
+  mangaEntries      MangaEntry[]
+  quests            Quest[]
+  questCompletions  QuestCompletion[]
+  questNotifications QuestNotification[]
+  workoutSessions   WorkoutSession[]
+  workoutExercises  WorkoutExercise[]
+  workoutSets       WorkoutSet[]
+}
+
+model AnimeEntry {
+  id             String      @id @default(cuid())
+  userId         String
+  organizationId String
+  title          String
+  status         AnimeStatus @default(plan_to_watch)
+  currentEpisode Int         @default(0)
+  totalEpisodes  Int?
+  score          Int?
+  notes          String?
+  coverUrl       String?
+  startDate      DateTime?
+  endDate        DateTime?
+  rewatchCount   Int         @default(0)
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([userId, organizationId, updatedAt])
+  @@index([organizationId, status])
+}
+
+model MangaEntry {
+  id             String      @id @default(cuid())
+  userId         String
+  organizationId String
+  title          String
+  author         String?
+  totalVolumes   Int?
+  ownedVolumes   Int[]       @default([])
+  status         MangaStatus @default(collecting)
+  score          Int?
+  notes          String?
+  coverUrl       String?
+  pricePerVolume Float?
+  totalCost      Float?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([userId, organizationId, updatedAt])
+  @@index([organizationId, status])
+}
+
+model Quest {
+  id                    String          @id @default(cuid())
+  userId                String
+  organizationId        String
+  title                 String
+  description           String?
+  difficulty            QuestDifficulty @default(medium)
+  expReward             Int
+  isRecurring           Boolean         @default(false)
+  recurrencePattern     String?
+  active                Boolean         @default(true)
+  dueDate               DateTime?       @db.Date
+  dueTime               String?
+  reminderMinutesBefore Int?
+  createdAt             DateTime        @default(now())
+  updatedAt             DateTime        @updatedAt
+
+  user          User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization  Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  completions   QuestCompletion[]
+  notifications QuestNotification[]
+
+  @@index([userId, organizationId, createdAt])
+  @@index([organizationId, active])
+}
+
+model QuestCompletion {
+  id             String   @id @default(cuid())
+  questId         String
+  userId          String
+  organizationId  String
+  completedAt     DateTime @default(now())
+  expEarned       Int
+  streakCount     Int      @default(1)
+
+  quest         Quest         @relation(fields: [questId], references: [id], onDelete: Cascade)
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization  Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([questId, completedAt])
+  @@index([userId, organizationId, completedAt])
+}
+
+model QuestNotification {
+  id               String                @id @default(cuid())
+  questId          String
+  userId           String
+  organizationId   String
+  notificationType QuestNotificationType
+  message          String
+  sentAt           DateTime              @default(now())
+  readAt           DateTime?
+  createdAt        DateTime              @default(now())
+
+  quest         Quest         @relation(fields: [questId], references: [id], onDelete: Cascade)
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization  Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([userId, organizationId, sentAt])
+  @@index([questId, createdAt])
+}
+
+model WorkoutSession {
+  id              String               @id @default(cuid())
+  userId          String
+  organizationId  String
+  name            String
+  description     String?
+  workoutDate     DateTime             @db.Date
+  durationMinutes Int?
+  notes           String?
+  status          WorkoutSessionStatus @default(in_progress)
+  startedAt       DateTime?
+  completedAt     DateTime?
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+
+  user         User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  exercises    WorkoutExercise[]
+
+  @@index([userId, organizationId, workoutDate])
+  @@index([organizationId, status, startedAt])
+}
+
+model WorkoutExercise {
+  id               String   @id @default(cuid())
+  workoutSessionId String
+  userId           String
+  organizationId   String
+  exerciseName     String
+  muscleGroup      String?
+  notes            String?
+  orderIndex       Int      @default(0)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  workoutSession WorkoutSession @relation(fields: [workoutSessionId], references: [id], onDelete: Cascade)
+  user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  sets           WorkoutSet[]
+
+  @@index([workoutSessionId, orderIndex])
+  @@index([userId, organizationId, createdAt])
+}
+
+model WorkoutSet {
+  id                String   @id @default(cuid())
+  workoutExerciseId String
+  userId            String
+  organizationId    String
+  setNumber         Int
+  reps              Int?
+  weightKg          Float?
+  restSeconds       Int?
+  durationSeconds   Int?
+  notes             String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  workoutExercise WorkoutExercise @relation(fields: [workoutExerciseId], references: [id], onDelete: Cascade)
+  user            User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization    Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([workoutExerciseId, setNumber])
+  @@index([userId, organizationId, createdAt])
+}
+
+model UserModulePreference {
+  id             String   @id @default(cuid())
+  userId         String
+  organizationId String
+  moduleId       String
+  enabled        Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, organizationId, moduleId])
+  @@index([userId, organizationId])
+}
+
+model Party {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  description    String?
+  inviteCode     String   @unique
+  ownerId        String
+  maxMembers     Int      @default(10)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  owner        User         @relation("PartyOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  members      PartyMember[]
+  lists        PartyList[]
+
+  @@index([organizationId])
+  @@index([ownerId])
+}
+
+model ReleaseCalendar {
+  id             String              @id @default(cuid())
+  userId         String
+  organizationId String
+  title          String
+  type           ReleaseCalendarType
+  releaseDate    DateTime            @db.Date
+  description    String?
+  url            String?
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([userId, organizationId, releaseDate])
+  @@index([organizationId, releaseDate])
+}
+
+model PartyList {
+  id              String        @id @default(cuid())
+  partyId          String
+  name             String
+  type             PartyListType
+  content          Json?
+  createdByUserId  String
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  party         Party           @relation(fields: [partyId], references: [id], onDelete: Cascade)
+  createdByUser User            @relation("PartyListCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  items         PartyListItem[]
+
+  @@index([partyId, createdAt])
+  @@index([createdByUserId])
+}
+
+model PartyListItem {
+  id               String   @id @default(cuid())
+  listId            String
+  title             String
+  completed         Boolean  @default(false)
+  status            String   @default("plan_to_watch")
+  currentEpisode    Int      @default(0)
+  totalEpisodes     Int?
+  score             Int?
+  notes             String?
+  coverUrl          String?
+  startDate         DateTime?
+  endDate           DateTime?
+  rewatchCount      Int      @default(0)
+  createdByUserId   String
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  list          PartyList @relation(fields: [listId], references: [id], onDelete: Cascade)
+  createdByUser User      @relation("PartyListItemCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+
+  @@index([listId, createdAt])
+  @@index([createdByUserId])
+}
+
+model PartyMember {
+  id       String          @id @default(cuid())
+  partyId  String
+  userId   String
+  role     PartyMemberRole @default(member)
+  joinedAt DateTime        @default(now())
+
+  party Party @relation(fields: [partyId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([partyId, userId])
+  @@index([partyId])
+  @@index([userId])
+}
+
+model Membership {
+  id             String         @id @default(cuid())
+  userId         String
+  organizationId String
+  role           MembershipRole @default(member)
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, organizationId])
+  @@index([organizationId, role])
+}
+
+model AuditLog {
+  id             String        @id @default(cuid())
+  organizationId String?
+  actorUserId    String?
+  action         String
+  targetType     String?
+  targetId       String?
+  metadata       Json?
+  createdAt      DateTime      @default(now())
+
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  actor        User?         @relation("AuditLogActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@index([actorUserId, createdAt])
+}
