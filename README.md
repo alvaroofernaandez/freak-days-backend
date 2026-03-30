@@ -1,166 +1,103 @@
-# freak-days-api
+# FreakDays Backend
 
-Backend desacoplado de FreakDays sobre **NestJS + Prisma + PostgreSQL**, preparado para el cutover de autenticación a **Clerk** y manejo de multitenancy por organización.
+Decoupled backend for the FreakDays platform, built with NestJS + Prisma + PostgreSQL, with Clerk-based authentication, organization-level multitenancy, and feature modules for anime, manga, quests, workouts, profile, and party collaboration.
 
-## Stack
+## Tech Stack
 
 - Node.js 20+
 - pnpm 9+
-- NestJS 10 (TypeScript strict)
+- NestJS 10 (TypeScript strict mode)
 - Prisma ORM
-- PostgreSQL
+- PostgreSQL 16
+- Clerk (JWT + webhooks)
+- Cloudflare R2 (signed upload URLs)
 
-## Arranque desde cero (dev local)
+## What This API Provides
 
-Atajo de un comando (recomendado):
+- JWT authentication through Clerk, validated against remote JWKS.
+- Strict webhook-provisioned identity and tenant model (`User`, `Organization`, `Membership`).
+- Multi-tenant domain modules under a shared organization context.
+- Profile management with avatar/banner direct upload flow using signed URLs.
+- Baseline quality gates for linting, tests, and migration safety.
 
-```bash
-pnpm dev:bootstrap
-```
-
-Este comando hace: `docker compose up -d` → espera healthcheck de Postgres → Prisma generate + migrate deploy + check → lint + test → `start:dev`.
-
-Si querés preparar todo sin levantar la API:
-
-```bash
-pnpm dev:bootstrap:setup
-```
-
-```bash
-pnpm install
-cp .env.example .env
-
-# 1) Levantar PostgreSQL local
-docker compose up -d
-docker compose ps
-
-# 2) Preparar Prisma
-pnpm prisma:generate
-pnpm prisma:migrate:dev --name init
-pnpm prisma:migrations:check
-
-# 3) Validaciones mínimas
-pnpm lint
-pnpm test
-
-# 4) Levantar API
-pnpm start:dev
-```
-
-Notas:
-
-- `docker-compose.yml` expone PostgreSQL en `localhost:5433` (configurable con `POSTGRES_PORT`) con volumen persistente.
-- Variables locales por defecto: `POSTGRES_DB=freak_days`, `POSTGRES_USER=postgres`, `POSTGRES_PASSWORD=postgres`.
-- `DATABASE_URL` debe apuntar a `postgresql://postgres:postgres@localhost:5433/freak_days?schema=public` (o al puerto que definas en `POSTGRES_PORT`).
-
-API base:
-
-- `GET /api/health` (público)
-- `GET /api/v1/health/auth` (público, estado de configuración de Clerk)
-- `POST /api/v1/webhooks/clerk` (público, provisioning por eventos Clerk)
-
-## Scripts principales
-
-- `pnpm start:dev` — servidor Nest con watch
-- `pnpm dev:bootstrap` — bootstrap end-to-end (DB + Prisma + checks + start:dev)
-- `pnpm dev:bootstrap:setup` — bootstrap sin iniciar el servidor
-- `pnpm build` — build de producción
-- `pnpm lint` — lint mínimo (ESLint v9 flat config)
-- `pnpm test` — suite Jest (incluye smoke tests)
-- `pnpm exec tsc --noEmit` — chequeo de tipos estricto
-- `pnpm prisma:generate` — genera Prisma Client
-- `pnpm prisma:migrate:dev` — crea/aplica migración local
-- `pnpm prisma:migrations:check` — valida que exista al menos una migración versionada
-- `pnpm prisma:migrate:deploy` — valida migraciones y luego aplica en entornos no dev
-- `pnpm prisma:studio` — UI de inspección de datos
-
-## Quality gates (baseline backend)
-
-Estado mínimo para este baseline:
-
-- ✅ `pnpm lint` (ya no falla por falta de `eslint.config.js`)
-- ✅ `pnpm test` (hay smoke test en `test/health.smoke.spec.ts`)
-- ✅ `pnpm prisma:migrate:deploy` protegido con `prisma:migrations:check`
-
-Nota de release:
-
-- Si no existe una migración real con `migration.sql` en `prisma/migrations/*`, el deploy queda bloqueado intencionalmente hasta generar baseline con `pnpm prisma:migrate:dev --name init`.
-
-## Arquitectura inicial (scaffold)
+## High-Level Architecture
 
 ```
 src/
-  auth/             # Validación Clerk JWT por JWKS remoto
-  organizations/    # Módulo base de organizaciones
-  users/            # Módulo base de usuarios
-  health/           # Healthcheck público
-  common/           # Guard/interceptor/decorators cross-cutting
-  main.ts           # Bootstrap
-  app.module.ts     # Wiring global
+  auth/                    # Clerk JWT strategy + global auth guard
+  common/                  # Prisma module, org context guard, request context interceptor
+  health/                  # Public health endpoints
+  webhooks/                # Clerk webhook ingestion (Svix signature verification)
+  organizations/ users/    # Identity and tenant-related modules
+  profile/ storage/        # Profile logic + R2 signed URL integration
+  anime/ manga/ quests/ workouts/ party/ ...
+                           # Product feature modules
+  app.module.ts            # Global wiring
+  main.ts                  # App bootstrap (/api prefix)
 prisma/
-  schema.prisma     # Modelos base multitenant
+  schema.prisma            # Data model and enums
+  migrations/              # SQL migrations
+scripts/
+  bootstrap-dev.mjs        # One-command local bootstrap
 ```
 
-## Multitenancy (base)
+## Core Data Model
 
-Modelos incluidos en Prisma:
+Main entities include:
 
-- `User`
-- `Organization`
-- `Membership` con roles `owner | admin | member`
-- `AuditLog` (opcional, preparado)
+- `User`, `Profile`
+- `Organization`, `Membership` (`owner | admin | member`)
+- `AuditLog`
+- Domain entities such as `AnimeEntry`, `MangaEntry`, `Quest`, `WorkoutSession`, `Party`, and related child models
 
-## Autenticación (Clerk JWT)
+The schema is tenant-aware and indexed for common user + organization access patterns.
 
-La estrategia `ClerkJwtStrategy` valida JWTs de Clerk con firma real usando JWKS remoto (`jose`).
+## Authentication and Tenant Rules
 
-- Claims críticos validados: `iss`, `exp` y `aud` (si `CLERK_AUDIENCE` está configurado).
-- Configuración requerida para endpoints protegidos: `CLERK_ISSUER_URL` y `CLERK_JWKS_URL`.
-- Si faltan esas variables en runtime, los endpoints protegidos responden `401` con error controlado.
-- `@Public()` mantiene su comportamiento (no exige JWT).
-- Endpoint de observabilidad no sensible: `GET /api/v1/health/auth`.
+`ClerkJwtStrategy` validates Clerk tokens using `jose` and remote JWKS.
 
-## Webhooks Clerk (provisioning User/Organization/Membership)
+- Required for protected endpoints: `CLERK_ISSUER_URL`, `CLERK_JWKS_URL`
+- Optional audience validation: `CLERK_AUDIENCE`
+- `@Public()` keeps an endpoint unauthenticated
+- Runtime behavior when auth config is missing on protected routes: controlled `401`
 
-Se agregó un endpoint público para sincronizar identidad base desde Clerk hacia Prisma:
+### Strict provisioning mode
+
+Protected requests do not auto-create users or organizations.
+
+- `User` must exist and be active in the local DB
+- `Organization` must exist and be active
+- Tenant-aware endpoints require an active `Membership`
+- Missing provisioning/membership returns semantic `401/403/404/400` responses
+
+This means Clerk webhook sync is the source of truth for identity and tenant creation.
+
+## Clerk Webhooks
+
+Public endpoint:
 
 - `POST /api/v1/webhooks/clerk`
-- Verificación de firma Svix usando headers `svix-id`, `svix-timestamp`, `svix-signature`.
-- Config requerida: `CLERK_WEBHOOK_SECRET`.
 
-Eventos soportados:
+Signature verification:
 
-- `user.created|updated|deleted`
-- `organization.created|updated|deleted`
-- `organizationMembership.created|updated|deleted`
+- Svix headers: `svix-id`, `svix-timestamp`, `svix-signature`
+- Required secret: `CLERK_WEBHOOK_SECRET`
 
-Comportamiento clave:
+Supported events:
 
-- `deleted` en `User` y `Organization` aplica soft-delete (`isActive=false`).
-- Membership hace upsert por `(userId, organizationId)` y borra en `organizationMembership.deleted`.
-- El handler es idempotente y crea entidades mínimas faltantes en eventos de membership.
+- `user.created`, `user.updated`, `user.deleted`
+- `organization.created`, `organization.updated`, `organization.deleted`
+- `organizationMembership.created`, `organizationMembership.updated`, `organizationMembership.deleted`
 
-## Modo estricto de identidad y tenant (webhook-provisioned)
+Behavior highlights:
 
-Los endpoints protegidos operan en modo estricto: **no existe bootstrap implícito** de `User` ni `Organization` durante requests de runtime.
+- `user.deleted` and `organization.deleted` perform soft delete (`isActive=false`)
+- Membership is upserted by `(userId, organizationId)`
+- Handlers are idempotent and can create minimal missing entities for membership events
 
-Reglas:
+## Profile + Media Uploads (R2 Signed URLs)
 
-- `User` debe existir y estar activo (`isActive=true`) por sincronización previa de webhook Clerk.
-- `Organization` debe existir y estar activa; se resuelve por `id` interno o `clerkOrgId` (`x-org-id`/claim).
-- Para endpoints tenant-aware, se exige `Membership` activa entre user+organization.
-- Si falta provisioning o membresía, la API falla con códigos semánticos (`401/403/404/400`) y mensajes explícitos.
-
-Implicancia operativa:
-
-- El endpoint `POST /api/v1/webhooks/clerk` es la **única fuente de creación implícita** de identidad/tenant.
-- Si un usuario autenticado en Clerk todavía no fue sincronizado por webhook, los endpoints protegidos devolverán `401` hasta que se complete el provisioning.
-
-## Vertical Profile + Media (R2 signed URLs)
-
-Se incorporó un vertical transicional para perfil de usuario autenticado y uploads de avatar/banner vía signed URL.
-
-### Endpoints Profile
+Profile endpoints:
 
 - `GET /api/v1/profile/me`
 - `PUT /api/v1/profile/me`
@@ -172,23 +109,116 @@ Se incorporó un vertical transicional para perfil de usuario autenticado y uplo
 - `DELETE /api/v1/profile/me/avatar`
 - `DELETE /api/v1/profile/me/banner`
 
-### Flujo de upload transicional
+Upload flow:
 
-1. FE pide signed URL (`.../upload-url`) con metadata del archivo.
-2. FE sube directamente con `PUT` a la URL firmada de R2.
-3. FE confirma (`.../confirm`) para persistir `avatarKey/avatarUrl` o `bannerKey/bannerUrl`.
+1. Frontend requests signed URL (`.../upload-url`) with file metadata.
+2. Frontend uploads directly to R2 via `PUT`.
+3. Frontend confirms upload (`.../confirm`) to persist keys/URLs.
 
-### Configuración R2
+## Public Health Endpoints
+
+- `GET /api/health`
+- `GET /api/v1/health/auth`
+
+## Local Development
+
+### Quick start (recommended)
+
+```bash
+pnpm dev:bootstrap
+```
+
+This command performs: `docker compose up -d` -> waits for PostgreSQL health -> Prisma generate + migration deploy + migration check -> lint + test -> `start:dev`.
+
+### Setup without starting the API
+
+```bash
+pnpm dev:bootstrap:setup
+```
+
+### Manual setup
+
+```bash
+pnpm install
+cp .env.example .env
+
+# 1) Start local PostgreSQL
+docker compose up -d
+docker compose ps
+
+# 2) Prepare Prisma
+pnpm prisma:generate
+pnpm prisma:migrate:dev --name init
+pnpm prisma:migrations:check
+
+# 3) Baseline quality checks
+pnpm lint
+pnpm test
+
+# 4) Run API
+pnpm start:dev
+```
+
+`docker-compose.yml` exposes PostgreSQL on `localhost:5433` by default (configurable through `POSTGRES_PORT`) and uses a persistent Docker volume.
+
+## Environment Variables
+
+Minimum required:
+
+- `DATABASE_URL`
+
+Auth-related:
+
+- `CLERK_ISSUER_URL`
+- `CLERK_JWKS_URL`
+- `CLERK_AUDIENCE` (optional)
+- `CLERK_WEBHOOK_SECRET` (required for webhook ingestion)
+
+Storage-related (for media uploads):
 
 - `R2_ACCOUNT_ID`
 - `R2_BUCKET`
 - `R2_ACCESS_KEY_ID`
 - `R2_SECRET_ACCESS_KEY`
 - `R2_PUBLIC_URL`
-- `R2_ENDPOINT` (opcional, para override explícito)
+- `R2_ENDPOINT` (optional override)
 
-## Próximos hitos sugeridos
+Runtime:
 
-1. Definir DTOs y casos de uso en `users` y `organizations`.
-2. Incorporar políticas de autorización por tenant/rol.
-3. Endurecer validaciones de media (MIME/size) y limpieza de archivos reemplazados.
+- `PORT` (defaults to `3000`)
+
+## Scripts
+
+- `pnpm start:dev` - run Nest server in watch mode
+- `pnpm dev:bootstrap` - end-to-end local bootstrap + start server
+- `pnpm dev:bootstrap:setup` - bootstrap without starting server
+- `pnpm build` - production build
+- `pnpm lint` - ESLint checks
+- `pnpm test` - Jest suite (includes smoke tests)
+- `pnpm prisma:generate` - generate Prisma Client
+- `pnpm prisma:migrate:dev` - create/apply local migration
+- `pnpm prisma:migrations:check` - ensure a versioned migration exists
+- `pnpm prisma:migrate:deploy` - guarded migration deploy for non-dev environments
+- `pnpm prisma:studio` - inspect DB data via Prisma Studio
+
+## Quality Gates
+
+Expected baseline:
+
+- `pnpm lint` passes
+- `pnpm test` passes
+- `pnpm prisma:migrate:deploy` is protected by migration existence checks
+
+Release safety note:
+
+If there is no real `migration.sql` inside `prisma/migrations/*`, migration deploy is intentionally blocked until a baseline migration is generated.
+
+## API Prefixing
+
+The app uses a global `/api` prefix. Most feature routes are versioned under `/api/v1`.
+
+## Suggested Next Milestones
+
+1. Expand DTO and use-case boundaries in `users` and `organizations`.
+2. Harden tenant/role authorization policies.
+3. Strengthen media validation (MIME/size) and file replacement cleanup.
